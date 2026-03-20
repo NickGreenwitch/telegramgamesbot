@@ -1,49 +1,53 @@
 <template>
   <div class="game-room" v-if="room">
-    <!-- Header -->
-    <div class="card header">
-      <div class="room-info">
-        <span class="game-icon">{{ room.game === 'mafia' ? '🔫' : '🐉' }}</span>
-        <div>
-          <h2>{{ room.game === 'mafia' ? t('create.mafia') : t('create.dnd') }}</h2>
-          <div class="room-code">
-            {{ t('room.code') }}: <strong>{{ room.code }}</strong>
-            <button class="copy-btn" @click="copyCode">📋</button>
+    <!-- Game in progress: show game-specific UI -->
+    <MafiaGame v-if="gameActive && room.game === 'mafia'" />
+
+    <!-- Lobby: waiting for players -->
+    <template v-else>
+      <!-- Header -->
+      <div class="card header">
+        <div class="room-info">
+          <span class="game-icon">{{ room.game === 'mafia' ? '🔫' : '🐉' }}</span>
+          <div>
+            <h2>{{ room.game === 'mafia' ? t('create.mafia') : t('create.dnd') }}</h2>
+            <div class="room-code">
+              {{ t('room.code') }}: <strong>{{ room.code }}</strong>
+              <button class="copy-btn" @click="copyCode">📋</button>
+            </div>
           </div>
         </div>
       </div>
-    </div>
 
-    <!-- Players list -->
-    <div class="card">
-      <h3>{{ t('room.players') }} ({{ room.players.length }})</h3>
-      <div class="players">
-        <div
-          v-for="player in room.players"
-          :key="player.id"
-          class="player"
-          :class="{ offline: !player.isConnected }"
-        >
-          <span class="player-avatar">{{ player.isHost ? '👑' : '🎮' }}</span>
-          <span class="player-name">{{ player.name }}</span>
-          <span v-if="!player.isConnected" class="offline-badge">offline</span>
+      <!-- Players list -->
+      <div class="card">
+        <h3>{{ t('room.players') }} ({{ room.players.length }})</h3>
+        <div class="players">
+          <div
+            v-for="player in room.players"
+            :key="player.id"
+            class="player"
+            :class="{ offline: !player.isConnected }"
+          >
+            <span class="player-avatar">{{ player.isHost ? '👑' : '🎮' }}</span>
+            <span class="player-name">{{ player.name }}</span>
+            <span v-if="!player.isConnected" class="offline-badge">offline</span>
+          </div>
         </div>
       </div>
-    </div>
 
-    <!-- Waiting state -->
-    <div v-if="room.status === 'waiting'" class="waiting">
-      <p class="hint">{{ t('room.waiting') }}</p>
-      
-      <button v-if="isHost" @click="startGame" :disabled="room.players.length < minPlayers">
-        {{ t('room.start') }}
-      </button>
-      <p v-if="isHost && room.players.length < minPlayers" class="hint">
-        {{ t('room.minPlayers', { count: minPlayers }) }}
-      </p>
-    </div>
+      <!-- Waiting state -->
+      <div v-if="room.status === 'waiting'" class="waiting">
+        <p class="hint">{{ t('room.waiting') }}</p>
 
-    <!-- TODO: Game-specific UIs will go here -->
+        <button v-if="isHost" @click="startGame" :disabled="room.players.length < minPlayers">
+          {{ t('room.start') }}
+        </button>
+        <p v-if="isHost && room.players.length < minPlayers" class="hint">
+          {{ t('room.minPlayers', { count: minPlayers }) }}
+        </p>
+      </div>
+    </template>
   </div>
 
   <div v-else class="loading">
@@ -57,6 +61,7 @@ import { useRoute } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { useSocket } from '@/composables/useSocket';
 import { useTelegram } from '@/composables/useTelegram';
+import MafiaGame from '@/components/mafia/MafiaGame.vue';
 import type { Room } from '@party-games/shared';
 
 const { t } = useI18n();
@@ -65,6 +70,7 @@ const { socket } = useSocket();
 const { telegramId, userName } = useTelegram();
 
 const room = ref<Room | null>(null);
+const gameActive = ref(false);
 const code = route.params.code as string;
 
 const isHost = computed(() => {
@@ -82,13 +88,16 @@ const minPlayers = computed(() => {
 onMounted(() => {
   // Join the room via socket
   socket.emit('room:join', code, {
-    id: '', // Will be resolved server-side
+    id: '',
     telegramId: telegramId.value,
     name: userName.value,
   });
 
   socket.on('room:updated', (updatedRoom) => {
     room.value = updatedRoom;
+    if (updatedRoom?.status === 'playing') {
+      gameActive.value = true;
+    }
   });
 
   socket.on('room:playerJoined', (player) => {
@@ -105,6 +114,10 @@ onMounted(() => {
       }
     }
   });
+
+  socket.on('game:started', () => {
+    gameActive.value = true;
+  });
 });
 
 onUnmounted(() => {
@@ -112,6 +125,7 @@ onUnmounted(() => {
   socket.off('room:updated');
   socket.off('room:playerJoined');
   socket.off('room:playerLeft');
+  socket.off('game:started');
 });
 
 function startGame() {
