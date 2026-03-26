@@ -2,6 +2,7 @@
   <div class="game-room" v-if="room">
     <!-- Game in progress: show game-specific UI -->
     <MafiaGame v-if="gameActive && room.game === 'mafia'" />
+    <DndGame v-else-if="gameActive && room.game === 'dnd'" />
 
     <!-- Lobby: waiting for players -->
     <template v-else>
@@ -62,6 +63,7 @@ import { useI18n } from 'vue-i18n';
 import { useSocket } from '@/composables/useSocket';
 import { useTelegram } from '@/composables/useTelegram';
 import MafiaGame from '@/components/mafia/MafiaGame.vue';
+import DndGame from '@/components/dnd/DndGame.vue';
 import type { Room } from '@party-games/shared';
 
 const { t } = useI18n();

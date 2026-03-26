@@ -107,6 +107,14 @@ export interface DndState {
   turnOrder?: string[];
   currentTurn?: string;
   log: DndLogEntry[];
+  availableSpells?: DndSpellInfo[];
+}
+
+export interface DndSpellInfo {
+  name: string;
+  description: string;
+  isHealing: boolean;
+  isAoe: boolean;
 }
 
 export interface DndLogEntry {
@@ -127,6 +135,15 @@ export interface DiceRoll {
 export interface DndSettings {
   maxPlayers: number;
   allowCustomCharacters: boolean;
+}
+
+// ===== D&D Character Creation Payload =====
+
+export interface CreateCharacterPayload {
+  name: string;
+  race: DndRace;
+  class: DndClass;
+  stats: DndStats;
 }
 
 // ===== Game Settings Union =====
@@ -156,6 +173,8 @@ export interface ServerToClientEvents {
   'dnd:turnChange': (playerId: string) => void;
   'dnd:battleStart': (turnOrder: string[]) => void;
   'dnd:battleEnd': () => void;
+  'dnd:characterCreated': (character: DndCharacter) => void;
+  'dnd:error': (message: string) => void;
 }
 
 export interface ClientToServerEvents {
@@ -168,10 +187,14 @@ export interface ClientToServerEvents {
   'mafia:nightAction': (targetId: string) => void;
 
   // D&D
+  'dnd:createCharacter': (payload: CreateCharacterPayload) => void;
   'dnd:action': (text: string) => void;
   'dnd:roll': (dice: string) => void;
   'dnd:narrative': (text: string) => void; // DM only
+  'dnd:battleStart': () => void;           // DM only
+  'dnd:battleEnd': () => void;             // DM only
   'dnd:battleAction': (action: string, targetId?: string) => void;
+  'dnd:modifyHp': (targetCharacterId: string, amount: number) => void; // DM only
 }
 
 // ===== i18n =====

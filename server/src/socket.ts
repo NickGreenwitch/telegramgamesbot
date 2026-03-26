@@ -3,12 +3,17 @@ import type { ServerToClientEvents, ClientToServerEvents, Player } from '@party-
 import type { Db } from './db.js';
 import { MafiaEngine } from './games/mafia/index.js';
 import { getDefaultSettings } from './games/mafia/roles.js';
+import { DndEngine } from './games/dnd/index.js';
 
 type IO = Server<ClientToServerEvents, ServerToClientEvents>;
 type GameSocket = Socket<ClientToServerEvents, ServerToClientEvents>;
 
 // Active game engines, keyed by roomId
-const activeGames = new Map<string, MafiaEngine>();
+const activeMafiaGames = new Map<string, MafiaEngine>();
+const activeDndGames = new Map<string, DndEngine>();
+
+// Keep backward compatibility
+const activeGames = activeMafiaGames;
 
 export function setupSocketHandlers(io: IO, db: Db) {
   io.on('connection', (socket: GameSocket) => {
@@ -65,14 +70,23 @@ export function setupSocketHandlers(io: IO, db: Db) {
       });
 
       // If game is already running, send current game state
-      const engine = activeGames.get(room.id);
-      if (engine && currentPlayerId) {
-        const state = engine.getState();
+      const mafiaEngine = activeMafiaGames.get(room.id);
+      if (mafiaEngine && currentPlayerId) {
+        const state = mafiaEngine.getState();
         socket.emit('mafia:stateUpdate', state);
-        // Send player's role privately
-        const role = engine.getPlayerRole(currentPlayerId);
+        const role = mafiaEngine.getPlayerRole(currentPlayerId);
         if (role) {
           socket.emit('mafia:roleAssigned', role);
+        }
+      }
+
+      const dndEngine = activeDndGames.get(room.id);
+      if (dndEngine && currentPlayerId) {
+        const state = dndEngine.getState();
+        socket.emit('dnd:stateUpdate', state);
+        const character = dndEngine.getCharacter(currentPlayerId);
+        if (character) {
+          socket.emit('dnd:characterCreated', character);
         }
       }
     });
@@ -122,11 +136,27 @@ export function setupSocketHandlers(io: IO, db: Db) {
           settings: { ...getDefaultSettings(), ...settings },
         });
 
-        activeGames.set(currentRoomId, engine);
+        activeMafiaGames.set(currentRoomId, engine);
         engine.start();
       }
 
-      // TODO: D&D engine
+      if (room.game === 'dnd') {
+        const playerIds = players.map((p: any) => p.id);
+        const settings = JSON.parse(room.settings || '{}');
+
+        const engine = new DndEngine(io, db, {
+          roomId: currentRoomId,
+          dmPlayerId: room.host_id,
+          playerIds,
+          settings: {
+            maxPlayers: settings.maxPlayers || 6,
+            allowCustomCharacters: settings.allowCustomCharacters ?? true,
+          },
+        });
+
+        activeDndGames.set(currentRoomId, engine);
+        engine.start();
+      }
     });
 
     // ==================== Mafia Events ====================
@@ -145,28 +175,69 @@ export function setupSocketHandlers(io: IO, db: Db) {
       engine.handleNightAction(currentPlayerId, targetId);
     });
 
-    // ==================== D&D Events (placeholder) ====================
+    // ==================== D&D Events ====================
+
+    socket.on('dnd:createCharacter', (payload) => {
+      if (!currentRoomId || !currentPlayerId) return;
+      const engine = activeDndGames.get(currentRoomId);
+      if (!engine) return;
+      engine.handleCreateCharacter(
+        currentPlayerId,
+        payload.name,
+        payload.race,
+        payload.class,
+        payload.stats,
+      );
+    });
 
     socket.on('dnd:roll', (dice) => {
       if (!currentRoomId || !currentPlayerId) return;
-      const result = rollDice(dice);
-      io.to(currentRoomId).emit('dnd:rollResult', {
-        timestamp: Date.now(),
-        type: 'roll',
-        playerId: currentPlayerId,
-        text: `Rolled ${dice}: ${result.total}`,
-        roll: result,
-      });
+      const engine = activeDndGames.get(currentRoomId);
+      if (engine) {
+        engine.handleRoll(currentPlayerId, dice);
+      }
     });
 
     socket.on('dnd:action', (text) => {
       if (!currentRoomId || !currentPlayerId) return;
-      // TODO: D&D engine
+      const engine = activeDndGames.get(currentRoomId);
+      if (!engine) return;
+      engine.handleAction(currentPlayerId, text);
     });
 
     socket.on('dnd:narrative', (text) => {
-      if (!currentRoomId) return;
-      io.to(currentRoomId).emit('dnd:narrative', text);
+      if (!currentRoomId || !currentPlayerId) return;
+      const engine = activeDndGames.get(currentRoomId);
+      if (!engine) return;
+      engine.handleNarrative(currentPlayerId, text);
+    });
+
+    socket.on('dnd:battleStart' as any, () => {
+      if (!currentRoomId || !currentPlayerId) return;
+      const engine = activeDndGames.get(currentRoomId);
+      if (!engine) return;
+      engine.handleBattleStart(currentPlayerId);
+    });
+
+    socket.on('dnd:battleEnd' as any, () => {
+      if (!currentRoomId || !currentPlayerId) return;
+      const engine = activeDndGames.get(currentRoomId);
+      if (!engine) return;
+      engine.handleBattleEnd(currentPlayerId);
+    });
+
+    socket.on('dnd:battleAction', (action, targetId) => {
+      if (!currentRoomId || !currentPlayerId) return;
+      const engine = activeDndGames.get(currentRoomId);
+      if (!engine) return;
+      engine.handleBattleAction(currentPlayerId, action, targetId);
+    });
+
+    socket.on('dnd:modifyHp' as any, (targetCharacterId: string, amount: number) => {
+      if (!currentRoomId || !currentPlayerId) return;
+      const engine = activeDndGames.get(currentRoomId);
+      if (!engine) return;
+      engine.handleDmModifyHp(currentPlayerId, targetCharacterId, amount);
     });
 
     // ==================== Disconnect ====================
@@ -181,33 +252,20 @@ export function setupSocketHandlers(io: IO, db: Db) {
   });
 }
 
-// ==================== Utilities ====================
-
-function rollDice(notation: string) {
-  const match = notation.match(/^(\d+)?d(\d+)([+-]\d+)?$/);
-  if (!match) return { dice: notation, results: [0], modifier: 0, total: 0 };
-
-  const count = parseInt(match[1] || '1');
-  const sides = parseInt(match[2]);
-  const modifier = parseInt(match[3] || '0');
-
-  const results: number[] = [];
-  for (let i = 0; i < count; i++) {
-    results.push(Math.floor(Math.random() * sides) + 1);
-  }
-
-  const total = results.reduce((a, b) => a + b, 0) + modifier;
-  return { dice: notation, results, modifier, total };
-}
-
 /**
  * Clean up a game engine when the room is done.
  * Called externally or on room deletion.
  */
 export function destroyGame(roomId: string): void {
-  const engine = activeGames.get(roomId);
-  if (engine) {
-    engine.destroy();
-    activeGames.delete(roomId);
+  const mafiaEngine = activeMafiaGames.get(roomId);
+  if (mafiaEngine) {
+    mafiaEngine.destroy();
+    activeMafiaGames.delete(roomId);
+  }
+
+  const dndEngine = activeDndGames.get(roomId);
+  if (dndEngine) {
+    dndEngine.destroy();
+    activeDndGames.delete(roomId);
   }
 }
