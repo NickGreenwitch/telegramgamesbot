@@ -7,16 +7,33 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 
+function isLightColor(hex: string): boolean {
+  const c = hex.replace('#', '');
+  const r = parseInt(c.substring(0, 2), 16);
+  const g = parseInt(c.substring(2, 4), 16);
+  const b = parseInt(c.substring(4, 6), 16);
+  // Perceived brightness (ITU-R BT.709)
+  return (r * 0.299 + g * 0.587 + b * 0.114) > 150;
+}
+
 const themeStyles = computed(() => {
   const tg = window.Telegram?.WebApp?.themeParams;
   if (!tg) return {};
+
+  const secondaryBg = tg.secondary_bg_color || '#16213e';
+  // If secondary bg is light but text color is also light, force dark text on cards
+  const cardText = isLightColor(secondaryBg)
+    ? (tg.text_color && !isLightColor(tg.text_color) ? tg.text_color : '#000000')
+    : (tg.text_color || '#ffffff');
+
   return {
     '--bg-color': tg.bg_color || '#1a1a2e',
     '--text-color': tg.text_color || '#ffffff',
     '--hint-color': tg.hint_color || '#999999',
     '--button-color': tg.button_color || '#5865f2',
     '--button-text-color': tg.button_text_color || '#ffffff',
-    '--secondary-bg': tg.secondary_bg_color || '#16213e',
+    '--secondary-bg': secondaryBg,
+    '--card-text-color': cardText,
   };
 });
 </script>
@@ -60,6 +77,7 @@ button:active {
 
 .card {
   background: var(--secondary-bg, #16213e);
+  color: var(--card-text-color, var(--text-color, #ffffff));
   border-radius: 16px;
   padding: 20px;
   margin-bottom: 12px;
